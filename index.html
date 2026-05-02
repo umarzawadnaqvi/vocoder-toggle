@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Hand Vocoder Toggle</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  
+  <style>
+    body { text-align: center; background: #121212; color: white; font-family: sans-serif; }
+    #video-container { position: relative; display: inline-block; }
+    canvas { position: absolute; left: 0; top: 0; }
+    button { padding: 20px; font-size: 20px; margin: 20px; border-radius: 10px; cursor: pointer; }
+    #status { font-size: 24px; font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Vocoder Hand Toggle</h1>
+  <button id="startBtn">TAP TO START AUDIO</button>
+  <div id="status">System: Offline</div>
+
+  <div id="video-container">
+    <video id="input_video" style="width: 100%; max-width: 400px; transform: scaleX(-1);"></video>
+    <canvas id="output_canvas"></canvas>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const statusDiv = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    
+    let vocoder, synth, mic;
+
+    // Initialize Audio when user taps button
+    startBtn.onclick = async () => {
+      await Tone.start(); // Unlocks mobile audio
+      
+      vocoder = new Tone.Vocoder().toDestination();
+      mic = new Tone.UserMedia();
+      synth = new Tone.PolySynth().connect(vocoder.carrier);
+
+      await mic.open();
+      mic.connect(vocoder);
+      
+      startBtn.style.display = 'none';
+      statusDiv.innerText = "System: Listening...";
+      setupHands();
+    };
+
+    function setupHands() {
+      const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
+
+      hands.onResults((results) => {
+        if (results.multiHandLandmarks.length > 0) {
+          const hand = results.multiHandLandmarks[0];
+          // Check if Index finger tip (8) is above knuckle (6)
+          const isOpen = hand[8].y < hand[6].y;
+
+          if (isOpen) {
+            synth.triggerAttack("C3");
+            statusDiv.innerText = "VOCODER: ON";
+            statusDiv.style.color = "#00ff00";
+          } else {
+            synth.releaseAll();
+            statusDiv.innerText = "VOCODER: OFF (Muted)";
+            statusDiv.style.color = "#ff4444";
+          }
+        }
+      });
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 640, height: 480
+      });
+      camera.start();
+    }
+  </script>
+</body>
+</html>
