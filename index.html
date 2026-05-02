@@ -22,70 +22,85 @@
     <button id="startBtn">START SYSTEM</button>
     <div id="debug-log">Log: Initialized</div>
 
-    <script>
-        const videoElement = document.getElementById('input_video');
-        const statusDiv = document.getElementById('status');
-        const startBtn = document.getElementById('startBtn');
-        const debugLog = document.getElementById('debug-log');
+    const videoElement = document.getElementById('input_video');
+const statusDiv = document.getElementById('status');
+const startBtn = document.getElementById('startBtn');
+const debugLog = document.getElementById('debug-log');
 
-        function log(msg) { debugLog.innerText += "\n> " + msg; }
+function log(msg) { debugLog.innerText += "\n> " + msg; }
 
-        let audioCtx, micStream, gainNode;
+let audioCtx, micSource, robotSynth, modulatorNode, outputGain;
 
-        startBtn.onclick = async () => {
-            log("Starting...");
-            try {
-                // 1. Audio Setup (Standard Web Audio)
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                gainNode = audioCtx.createGain();
-                gainNode.gain.value = 0; // Start muted
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-                const source = audioCtx.createMediaStreamSource(stream);
-                
-                source.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                videoElement.srcObject = stream;
-                log("Mic & Camera hardware linked.");
+startBtn.onclick = async () => {
+    log("Initializing Robot Voice...");
+    try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // 1. Get Microphone
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        micSource = audioCtx.createMediaStreamSource(stream);
+        videoElement.srcObject = stream;
 
-                // 2. MediaPipe Setup
-                const hands = new Hands({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-                });
+        // 2. Create the "Robot Buzz" (The Carrier)
+        robotSynth = audioCtx.createOscillator();
+        robotSynth.type = 'sawtooth'; 
+        robotSynth.frequency.setValueAtTime(150, audioCtx.currentTime); // Low robotic hum
+        robotSynth.start();
 
-                hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
+        // 3. The "Vocoder" Logic (Ring Modulation)
+        // We use a GainNode where the mic controls the volume of the synth
+        modulatorNode = audioCtx.createGain();
+        modulatorNode.gain.value = 0; 
+        
+        // This connects your voice to the "Volume Knob" of the Buzz
+        micSource.connect(modulatorNode.gain); 
+        robotSynth.connect(modulatorNode);
 
-                hands.onResults((results) => {
-                    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                        const hand = results.multiHandLandmarks[0];
-                        // landmark 8 (tip) vs 6 (knuckle)
-                        const isOpen = hand[8].y < hand[6].y;
+        // 4. Master Output (The Hand Toggle)
+        outputGain = audioCtx.createGain();
+        outputGain.gain.value = 0;
+        
+        modulatorNode.connect(outputGain);
+        outputGain.connect(audioCtx.destination);
 
-                        if (isOpen) {
-                            gainNode.gain.setTargetAtTime(1, audioCtx.currentTime, 0.05);
-                            statusDiv.innerText = "AUDIO: OPEN";
-                            statusDiv.style.color = "#00ffcc";
-                        } else {
-                            gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
-                            statusDiv.innerText = "AUDIO: MUTED";
-                            statusDiv.style.color = "#ff4444";
-                        }
-                    }
-                });
+        log("Hardware Linked. Loading AI...");
 
-                const camera = new Camera(videoElement, {
-                    onFrame: async () => { await hands.send({image: videoElement}); },
-                    width: 640, height: 480
-                });
+        // 5. MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
 
-                await camera.start();
-                log("Processing frames...");
-                startBtn.style.display = 'none';
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
 
-            } catch (err) {
-                log("ERROR: " + err.message);
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const hand = results.multiHandLandmarks[0];
+                const isOpen = hand[8].y < hand[6].y;
+
+                if (isOpen) {
+                    outputGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.05);
+                    statusDiv.innerText = "VOCODER: ACTIVE";
+                    statusDiv.style.color = "#00ffcc";
+                } else {
+                    outputGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                    statusDiv.innerText = "VOCODER: MUTED";
+                    statusDiv.style.color = "#ff4444";
+                }
             }
-        };
-    </script>
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+
+        await camera.start();
+        log("System Online.");
+        startBtn.style.display = 'none';
+
+    } catch (err) {
+        log("ERROR: " + err.message);
+    }
+};
 </body>
 </html>
