@@ -1,103 +1,113 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>D-Major Gesture Vocoder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Air Canvas AI</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; background: #050505; color: #00ffcc; font-family: 'Courier New', monospace; text-align: center; }
-        #video-container { position: relative; width: 320px; height: 240px; margin: 10px auto; border: 2px solid #333; border-radius: 10px; overflow: hidden; }
-        video { width: 100%; transform: scaleX(-1); }
-        #status { font-size: 1.5rem; font-weight: bold; margin: 10px; min-height: 1.6em; }
-        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        #controls { position: absolute; top: 10px; left: 10px; z-index: 10; color: white; pointer-events: none; }
+        #video-container { position: absolute; bottom: 10px; right: 10px; width: 120px; border: 1px solid #444; border-radius: 8px; overflow: hidden; transform: scaleX(-1); }
+        video { width: 100%; display: block; }
+        canvas { position: absolute; top: 0; left: 0; touch-action: none; transform: scaleX(-1); }
+        button { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 15px 30px; border-radius: 30px; border: none; background: #00ffcc; font-weight: bold; z-index: 20; }
     </style>
 </head>
 <body>
-    <h1>CHORD VOCODER</h1>
-    <div id="status">READY</div>
+
+    <div id="controls">
+        <h2 id="mode-status">Waiting for Start...</h2>
+        <p>Pinch Index + Thumb to Draw</p>
+    </div>
+
+    <canvas id="paint_canvas"></canvas>
     <div id="video-container"><video id="input_video" playsinline></video></div>
-    <button id="startBtn">ACTIVATE SYSTEM</button>
+    
+    <button id="startBtn">START CANVAS</button>
 
     <script>
         const videoElement = document.getElementById('input_video');
-        const statusDiv = document.getElementById('status');
+        const canvasElement = document.getElementById('paint_canvas');
+        const ctx = canvasElement.getContext('2d');
+        const status = document.getElementById('mode-status');
         const startBtn = document.getElementById('startBtn');
 
-        let audioCtx, vocoderGain, oscillators = [];
-        const CHORDS = {
-            1: [146.83, 185.00, 220.00], // D Major (D3, F#3, A3)
-            2: [164.81, 196.00, 246.94], // E Minor (E3, G3, B3)
-            3: [185.00, 220.00, 277.18], // F# Minor (F#3, A3, C#4)
-            4: [196.00, 246.94, 293.66], // G Major (G3, B3, D4)
-            5: [220.00, 277.18, 329.63]  // A Major (A3, C#4, E4)
+        let lastX = 0, lastY = 0;
+        let isDrawing = false;
+
+        // Resize canvas to fill screen
+        function resize() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            ctx.strokeStyle = '#00ffcc';
+            ctx.lineWidth = 5;
+            ctx.lineCap = 'round';
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function getDistance(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        startBtn.onclick = () => {
+            startBtn.style.display = 'none';
+            status.innerText = "Initializing AI...";
+            setupAI();
         };
 
-        startBtn.onclick = async () => {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-            videoElement.srcObject = stream;
-            const micSource = audioCtx.createMediaStreamSource(stream);
-
-            // 1. Setup Carriers
-            const carrierMixer = audioCtx.createGain();
-            [0, 1, 2].forEach(i => {
-                const osc = audioCtx.createOscillator();
-                osc.type = 'sawtooth';
-                osc.frequency.value = 0; // Starts silent
-                osc.start();
-                osc.connect(carrierMixer);
-                oscillators.push(osc);
-            });
-
-            // 2. Clearer 6-Band Vocoder Bank
-            vocoderGain = audioCtx.createGain();
-            vocoderGain.gain.value = 0;
-            const bands = [250, 500, 1000, 2000, 4000, 8000];
-            bands.forEach(freq => {
-                const mF = audioCtx.createBiquadFilter(); mF.type = 'bandpass'; mF.frequency.value = freq; mF.Q.value = 2;
-                const cF = audioCtx.createBiquadFilter(); cF.type = 'bandpass'; cF.frequency.value = freq; cF.Q.value = 2;
-                const env = audioCtx.createGain(); env.gain.value = 0;
-
-                micSource.connect(mF);
-                mF.connect(env.gain);
-                carrierMixer.connect(cF);
-                cF.connect(env);
-                env.connect(vocoderGain);
-            });
-
-            vocoderGain.connect(audioCtx.destination);
-
-            // 3. Hand Logic
+        function setupAI() {
             const hands = new Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
 
-            hands.onResults((res) => {
-                if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
-                    const lm = res.multiHandLandmarks[0];
-                    // Finger counting logic (checking if tip is above knuckle)
-                    const fingers = [8, 12, 16, 20].filter(i => lm[i].y < lm[i-2].y).length;
-                    const thumb = lm[4].x < lm[3].x ? 1 : 0; // Simple thumb check
-                    const count = fingers + thumb;
+            hands.onResults((results) => {
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const lm = results.multiHandLandmarks[0];
+                    const indexTip = lm[8];
+                    const thumbTip = lm[4];
+                    
+                    // Map normalized coordinates (0-1) to screen pixels
+                    const x = indexTip.x * canvasElement.width;
+                    const y = indexTip.y * canvasElement.height;
 
-                    if (count > 0 && CHORDS[count]) {
-                        const now = audioCtx.currentTime;
-                        CHORDS[count].forEach((f, i) => {
-                            oscillators[i].frequency.setTargetAtTime(f, now, 0.03);
-                        });
-                        vocoderGain.gain.setTargetAtTime(1.5, now, 0.05);
-                        statusDiv.innerText = `CHORD: ${count} FINGERS`;
-                    } else {
-                        vocoderGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
-                        statusDiv.innerText = "MUTED (CLOSED)";
+                    // Pinch logic: if distance between thumb and index is small
+                    const distance = getDistance(indexTip, thumbTip);
+                    
+                    if (distance < 0.05) { // PINCHED
+                        if (!isDrawing) {
+                            isDrawing = true;
+                            lastX = x;
+                            lastY = y;
+                        }
+                        ctx.beginPath();
+                        ctx.moveTo(lastX, lastY);
+                        ctx.lineTo(x, y);
+                        ctx.stroke();
+                        status.innerText = "✏️ DRAWING";
+                        status.style.color = "#00ffcc";
+                    } else { // RELEASED
+                        isDrawing = false;
+                        status.innerText = "✋ MOVING (No Ink)";
+                        status.style.color = "#ffffff";
                     }
+
+                    // Clear Screen Logic: If all 5 fingers are up
+                    const fingersUp = [8, 12, 16, 20].filter(i => lm[i].y < lm[i-2].y).length;
+                    if (fingersUp === 4 && distance > 0.1) {
+                        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                    }
+
+                    lastX = x;
+                    lastY = y;
                 }
             });
 
-            new Camera(videoElement, { onFrame: async () => await hands.send({image: videoElement}) }).start();
-            startBtn.style.display = 'none';
-        };
+            new Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 640, height: 480
+            }).start();
+        }
     </script>
 </body>
 </html>
