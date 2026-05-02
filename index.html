@@ -4,103 +4,110 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hand Toggle System</title>
+    
+    <!-- Libraries must load before the script runs -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
     <style>
         body { margin: 0; background: #0f0f0f; color: #00ffcc; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
         #video-container { position: relative; width: 90%; max-width: 400px; border: 2px solid #333; border-radius: 15px; overflow: hidden; }
         video { width: 100%; display: block; transform: scaleX(-1); }
         #status { margin: 20px 0; font-size: 1.2rem; }
-        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; }
-        #debug-log { font-size: 10px; color: #666; margin-top: 20px; width: 80%; text-align: left; white-space: pre-wrap; }
+        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; color: #000; font-weight: bold; }
+        #debug-log { font-size: 10px; color: #666; margin-top: 20px; width: 80%; text-align: left; white-space: pre-wrap; height: 100px; overflow-y: auto; border-top: 1px solid #333; }
     </style>
 </head>
 <body>
-    <h1>SYSTEM V2</h1>
+    <h1>SYSTEM V2.1</h1>
     <div id="status">STATUS: STANDBY</div>
-    <div id="video-container"><video id="input_video"></video></div>
+    <div id="video-container"><video id="input_video" playsinline></video></div>
+    <br>
     <button id="startBtn">START SYSTEM</button>
     <div id="debug-log">Log: Initialized</div>
 
-    const videoElement = document.getElementById('input_video');
-const statusDiv = document.getElementById('status');
-const startBtn = document.getElementById('startBtn');
-const debugLog = document.getElementById('debug-log');
+    <!-- START OF SCRIPT TAG -->
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const debugLog = document.getElementById('debug-log');
 
-function log(msg) { debugLog.innerText += "\n> " + msg; }
+        function log(msg) { debugLog.innerText += "\n> " + msg; debugLog.scrollTop = debugLog.scrollHeight; }
 
-let audioCtx, micSource, robotSynth, modulatorNode, outputGain;
+        let audioCtx, micSource, robotSynth, modulatorNode, outputGain;
 
-startBtn.onclick = async () => {
-    log("Initializing Robot Voice...");
-    try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // 1. Get Microphone
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        micSource = audioCtx.createMediaStreamSource(stream);
-        videoElement.srcObject = stream;
+        startBtn.onclick = async () => {
+            log("Initializing Robot Voice...");
+            try {
+                // 1. Audio Setup
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                log("Requesting Hardware Permissions...");
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                micSource = audioCtx.createMediaStreamSource(stream);
+                videoElement.srcObject = stream;
 
-        // 2. Create the "Robot Buzz" (The Carrier)
-        robotSynth = audioCtx.createOscillator();
-        robotSynth.type = 'sawtooth'; 
-        robotSynth.frequency.setValueAtTime(150, audioCtx.currentTime); // Low robotic hum
-        robotSynth.start();
+                // 2. Create the "Robot Buzz" (Carrier)
+                robotSynth = audioCtx.createOscillator();
+                robotSynth.type = 'sawtooth'; 
+                robotSynth.frequency.setValueAtTime(150, audioCtx.currentTime); 
+                robotSynth.start();
 
-        // 3. The "Vocoder" Logic (Ring Modulation)
-        // We use a GainNode where the mic controls the volume of the synth
-        modulatorNode = audioCtx.createGain();
-        modulatorNode.gain.value = 0; 
-        
-        // This connects your voice to the "Volume Knob" of the Buzz
-        micSource.connect(modulatorNode.gain); 
-        robotSynth.connect(modulatorNode);
+                // 3. Modulator Logic
+                modulatorNode = audioCtx.createGain();
+                modulatorNode.gain.value = 0; 
+                
+                micSource.connect(modulatorNode.gain); 
+                robotSynth.connect(modulatorNode);
 
-        // 4. Master Output (The Hand Toggle)
-        outputGain = audioCtx.createGain();
-        outputGain.gain.value = 0;
-        
-        modulatorNode.connect(outputGain);
-        outputGain.connect(audioCtx.destination);
+                // 4. Output Logic
+                outputGain = audioCtx.createGain();
+                outputGain.gain.value = 0;
+                modulatorNode.connect(outputGain);
+                outputGain.connect(audioCtx.destination);
 
-        log("Hardware Linked. Loading AI...");
+                log("Audio Pipeline Ready.");
 
-        // 5. MediaPipe Hands
-        const hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
+                // 5. MediaPipe Setup
+                const hands = new Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
 
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
+                hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
 
-        hands.onResults((results) => {
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const hand = results.multiHandLandmarks[0];
-                const isOpen = hand[8].y < hand[6].y;
+                hands.onResults((results) => {
+                    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                        const hand = results.multiHandLandmarks[0];
+                        const isOpen = hand[8].y < hand[6].y;
 
-                if (isOpen) {
-                    outputGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.05);
-                    statusDiv.innerText = "VOCODER: ACTIVE";
-                    statusDiv.style.color = "#00ffcc";
-                } else {
-                    outputGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
-                    statusDiv.innerText = "VOCODER: MUTED";
-                    statusDiv.style.color = "#ff4444";
-                }
+                        if (isOpen) {
+                            outputGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.05);
+                            statusDiv.innerText = "VOCODER: ACTIVE";
+                            statusDiv.style.color = "#00ffcc";
+                        } else {
+                            outputGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                            statusDiv.innerText = "VOCODER: MUTED";
+                            statusDiv.style.color = "#ff4444";
+                        }
+                    }
+                });
+
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => { await hands.send({image: videoElement}); },
+                    width: 640, height: 480
+                });
+
+                await camera.start();
+                log("System Online.");
+                startBtn.style.display = 'none';
+
+            } catch (err) {
+                log("ERROR: " + err.message);
+                console.error(err);
             }
-        });
-
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { await hands.send({image: videoElement}); },
-            width: 640, height: 480
-        });
-
-        await camera.start();
-        log("System Online.");
-        startBtn.style.display = 'none';
-
-    } catch (err) {
-        log("ERROR: " + err.message);
-    }
-};
+        };
+    </script>
+    <!-- END OF SCRIPT TAG -->
 </body>
 </html>
