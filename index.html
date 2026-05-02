@@ -3,66 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pro Hand Vocoder</title>
-    
-    <!-- Load MediaPipe and the latest STABLE Tone.js -->
+    <title>Pro Hand Vocoder V3</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
 
     <style>
-        body { margin: 0; background: #1a1a1a; color: #00ffcc; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
-        #video-container { position: relative; width: 80%; max-width: 350px; border: 3px solid #00ffcc; border-radius: 20px; overflow: hidden; box-shadow: 0 0 20px #00ffcc55; }
+        body { margin: 0; background: #0a0a0a; color: #00ffcc; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+        #video-container { position: relative; width: 85%; max-width: 350px; border: 2px solid #333; border-radius: 15px; overflow: hidden; }
         video { width: 100%; display: block; transform: scaleX(-1); }
-        #status { margin: 20px 0; font-size: 1.5rem; font-weight: bold; text-shadow: 0 0 10px #00ffcc; }
-        button { padding: 20px 40px; font-size: 1.2rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; color: #000; font-weight: bold; transition: 0.3s; }
-        button:hover { background: #fff; box-shadow: 0 0 30px #fff; }
-        #debug-log { font-size: 10px; color: #555; margin-top: 20px; width: 80%; height: 60px; overflow-y: auto; text-align: left; border-top: 1px solid #333; }
+        #status { margin: 20px 0; font-size: 1.2rem; text-shadow: 0 0 5px #00ffcc; }
+        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; color: #000; font-weight: bold; }
+        #log-box { font-size: 10px; color: #444; margin-top: 15px; width: 80%; text-align: left; height: 50px; overflow-y: auto; }
     </style>
 </head>
 <body>
-    <h1>VOCODER PRO</h1>
-    <div id="status">STATUS: OFFLINE</div>
+    <h1>VOCODER V3</h1>
+    <div id="status">STATUS: READY</div>
     <div id="video-container"><video id="input_video" playsinline></video></div>
     <br>
-    <button id="startBtn">ACTIVATE VOCODER</button>
-    <div id="debug-log">Log: Awaiting Start...</div>
+    <button id="startBtn">START ENGINE</button>
+    <div id="log-box" id="log">Log: Standby</div>
 
     <script>
         const videoElement = document.getElementById('input_video');
         const statusDiv = document.getElementById('status');
         const startBtn = document.getElementById('startBtn');
-        const debugLog = document.getElementById('debug-log');
+        const logBox = document.getElementById('log-box');
 
-        function log(msg) { debugLog.innerText += "\n> " + msg; debugLog.scrollTop = debugLog.scrollHeight; }
+        function log(msg) { logBox.innerText += "\n> " + msg; }
 
-        let vocoder, synth, mic;
+        let audioCtx, masterGain, carrierOsc;
 
         startBtn.onclick = async () => {
-            log("Loading Tone.js Engine...");
+            log("Init Audio Context...");
             try {
-                await Tone.start();
-                log("Audio Context Started.");
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                videoElement.srcObject = stream;
+                const micSource = audioCtx.createMediaStreamSource(stream);
 
-                // 1. Setup high-quality Vocoder
-                vocoder = new Tone.Vocoder({
-                    highPolyphony: true,
-                    resonance: 0.5
-                }).toDestination();
+                // 1. Create Carrier (The "Robot" Sound)
+                carrierOsc = audioCtx.createOscillator();
+                carrierOsc.type = 'sawtooth';
+                carrierOsc.frequency.setValueAtTime(110, audioCtx.currentTime); // Low A2
+                carrierOsc.start();
 
-                // 2. Setup the "Carrier" (The Synth Sound)
-                synth = new Tone.PolySynth(Tone.Synth, {
-                    oscillator: { type: "sawtooth" },
-                    envelope: { attack: 0.05, release: 0.2 }
-                }).connect(vocoder.carrier);
+                // 2. Build a simple 3-band Vocoder Filter Bank
+                const bands = [400, 1000, 2500]; 
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0;
 
-                // 3. Setup the "Modulator" (Your Mic)
-                mic = new Tone.UserMedia();
-                await mic.open();
-                mic.connect(vocoder);
-                log("Microphone connected.");
+                bands.forEach(freq => {
+                    // Carrier Filter (The sound we hear)
+                    const cFilter = audioCtx.createBiquadFilter();
+                    cFilter.type = 'bandpass';
+                    cFilter.frequency.value = freq;
+                    cFilter.Q.value = 10;
 
-                // 4. MediaPipe AI Logic
+                    // Modulator Filter (The mic input)
+                    const mFilter = audioCtx.createBiquadFilter();
+                    mFilter.type = 'bandpass';
+                    mFilter.frequency.value = freq;
+                    mFilter.Q.value = 10;
+
+                    const envelope = audioCtx.createGain();
+                    envelope.gain.value = 0;
+
+                    // Connect Mic -> Filter -> Gain Control
+                    micSource.connect(mFilter);
+                    // This is the magic: Mic volume controls the Carrier volume at this frequency
+                    mFilter.connect(envelope.gain); 
+
+                    // Connect Synth -> Filter -> Controlled Gain
+                    carrierOsc.connect(cFilter);
+                    cFilter.connect(envelope);
+                    envelope.connect(masterGain);
+                });
+
+                masterGain.connect(audioCtx.destination);
+                log("Vocoder bank built.");
+
+                // 3. MediaPipe
                 const hands = new Hands({
                     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
                 });
@@ -73,33 +94,30 @@
                     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                         const hand = results.multiHandLandmarks[0];
                         const isOpen = hand[8].y < hand[6].y;
-
+                        
                         if (isOpen) {
-                            // Play a rich chord for the vocoder to "shape"
-                            synth.triggerAttack(["C3", "G3", "C4"], Tone.now());
+                            masterGain.gain.setTargetAtTime(1.5, audioCtx.currentTime, 0.05);
                             statusDiv.innerText = "VOCODER: ACTIVE";
                             statusDiv.style.color = "#00ffcc";
                         } else {
-                            synth.releaseAll();
+                            masterGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
                             statusDiv.innerText = "VOCODER: MUTED";
                             statusDiv.style.color = "#ff4444";
                         }
                     }
                 });
 
-                // 5. Camera Setup
                 const camera = new Camera(videoElement, {
                     onFrame: async () => { await hands.send({image: videoElement}); },
                     width: 640, height: 480
                 });
 
                 await camera.start();
-                log("System online and tracking.");
+                log("Camera & AI Live.");
                 startBtn.style.display = 'none';
 
             } catch (err) {
-                log("FATAL ERROR: " + err.message);
-                console.error(err);
+                log("ERR: " + err.message);
             }
         };
     </script>
