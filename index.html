@@ -3,30 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hand Toggle System</title>
+    <title>Pro Hand Vocoder</title>
     
-    <!-- Libraries must load before the script runs -->
+    <!-- Load MediaPipe and the latest STABLE Tone.js -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
 
     <style>
-        body { margin: 0; background: #0f0f0f; color: #00ffcc; font-family: monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
-        #video-container { position: relative; width: 90%; max-width: 400px; border: 2px solid #333; border-radius: 15px; overflow: hidden; }
+        body { margin: 0; background: #1a1a1a; color: #00ffcc; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+        #video-container { position: relative; width: 80%; max-width: 350px; border: 3px solid #00ffcc; border-radius: 20px; overflow: hidden; box-shadow: 0 0 20px #00ffcc55; }
         video { width: 100%; display: block; transform: scaleX(-1); }
-        #status { margin: 20px 0; font-size: 1.2rem; }
-        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; color: #000; font-weight: bold; }
-        #debug-log { font-size: 10px; color: #666; margin-top: 20px; width: 80%; text-align: left; white-space: pre-wrap; height: 100px; overflow-y: auto; border-top: 1px solid #333; }
+        #status { margin: 20px 0; font-size: 1.5rem; font-weight: bold; text-shadow: 0 0 10px #00ffcc; }
+        button { padding: 20px 40px; font-size: 1.2rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; color: #000; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #fff; box-shadow: 0 0 30px #fff; }
+        #debug-log { font-size: 10px; color: #555; margin-top: 20px; width: 80%; height: 60px; overflow-y: auto; text-align: left; border-top: 1px solid #333; }
     </style>
 </head>
 <body>
-    <h1>SYSTEM V2.1</h1>
-    <div id="status">STATUS: STANDBY</div>
+    <h1>VOCODER PRO</h1>
+    <div id="status">STATUS: OFFLINE</div>
     <div id="video-container"><video id="input_video" playsinline></video></div>
     <br>
-    <button id="startBtn">START SYSTEM</button>
-    <div id="debug-log">Log: Initialized</div>
+    <button id="startBtn">ACTIVATE VOCODER</button>
+    <div id="debug-log">Log: Awaiting Start...</div>
 
-    <!-- START OF SCRIPT TAG -->
     <script>
         const videoElement = document.getElementById('input_video');
         const statusDiv = document.getElementById('status');
@@ -35,41 +36,33 @@
 
         function log(msg) { debugLog.innerText += "\n> " + msg; debugLog.scrollTop = debugLog.scrollHeight; }
 
-        let audioCtx, micSource, robotSynth, modulatorNode, outputGain;
+        let vocoder, synth, mic;
 
         startBtn.onclick = async () => {
-            log("Initializing Robot Voice...");
+            log("Loading Tone.js Engine...");
             try {
-                // 1. Audio Setup
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                
-                log("Requesting Hardware Permissions...");
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-                micSource = audioCtx.createMediaStreamSource(stream);
-                videoElement.srcObject = stream;
+                await Tone.start();
+                log("Audio Context Started.");
 
-                // 2. Create the "Robot Buzz" (Carrier)
-                robotSynth = audioCtx.createOscillator();
-                robotSynth.type = 'sawtooth'; 
-                robotSynth.frequency.setValueAtTime(150, audioCtx.currentTime); 
-                robotSynth.start();
+                // 1. Setup high-quality Vocoder
+                vocoder = new Tone.Vocoder({
+                    highPolyphony: true,
+                    resonance: 0.5
+                }).toDestination();
 
-                // 3. Modulator Logic
-                modulatorNode = audioCtx.createGain();
-                modulatorNode.gain.value = 0; 
-                
-                micSource.connect(modulatorNode.gain); 
-                robotSynth.connect(modulatorNode);
+                // 2. Setup the "Carrier" (The Synth Sound)
+                synth = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: "sawtooth" },
+                    envelope: { attack: 0.05, release: 0.2 }
+                }).connect(vocoder.carrier);
 
-                // 4. Output Logic
-                outputGain = audioCtx.createGain();
-                outputGain.gain.value = 0;
-                modulatorNode.connect(outputGain);
-                outputGain.connect(audioCtx.destination);
+                // 3. Setup the "Modulator" (Your Mic)
+                mic = new Tone.UserMedia();
+                await mic.open();
+                mic.connect(vocoder);
+                log("Microphone connected.");
 
-                log("Audio Pipeline Ready.");
-
-                // 5. MediaPipe Setup
+                // 4. MediaPipe AI Logic
                 const hands = new Hands({
                     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
                 });
@@ -82,32 +75,33 @@
                         const isOpen = hand[8].y < hand[6].y;
 
                         if (isOpen) {
-                            outputGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.05);
+                            // Play a rich chord for the vocoder to "shape"
+                            synth.triggerAttack(["C3", "G3", "C4"], Tone.now());
                             statusDiv.innerText = "VOCODER: ACTIVE";
                             statusDiv.style.color = "#00ffcc";
                         } else {
-                            outputGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
+                            synth.releaseAll();
                             statusDiv.innerText = "VOCODER: MUTED";
                             statusDiv.style.color = "#ff4444";
                         }
                     }
                 });
 
+                // 5. Camera Setup
                 const camera = new Camera(videoElement, {
                     onFrame: async () => { await hands.send({image: videoElement}); },
                     width: 640, height: 480
                 });
 
                 await camera.start();
-                log("System Online.");
+                log("System online and tracking.");
                 startBtn.style.display = 'none';
 
             } catch (err) {
-                log("ERROR: " + err.message);
+                log("FATAL ERROR: " + err.message);
                 console.error(err);
             }
         };
     </script>
-    <!-- END OF SCRIPT TAG -->
 </body>
 </html>
