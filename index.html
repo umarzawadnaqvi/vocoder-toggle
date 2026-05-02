@@ -3,112 +3,100 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Singer Vocoder V4</title>
+    <title>D-Major Gesture Vocoder</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; background: #050505; color: #00ffcc; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
-        #video-container { position: relative; width: 80%; max-width: 300px; border: 2px solid #00ffcc; border-radius: 10px; overflow: hidden; }
-        video { width: 100%; display: block; transform: scaleX(-1); }
-        #status { margin: 15px; font-size: 1.4rem; font-weight: bold; }
-        button { padding: 20px 40px; font-size: 1.2rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; }
-        .controls { color: #666; font-size: 0.8rem; margin-top: 10px; }
+        body { margin: 0; background: #050505; color: #00ffcc; font-family: 'Courier New', monospace; text-align: center; }
+        #video-container { position: relative; width: 320px; height: 240px; margin: 10px auto; border: 2px solid #333; border-radius: 10px; overflow: hidden; }
+        video { width: 100%; transform: scaleX(-1); }
+        #status { font-size: 1.5rem; font-weight: bold; margin: 10px; min-height: 1.6em; }
+        button { padding: 15px 30px; font-size: 1rem; background: #00ffcc; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>VOCODER V4</h1>
-    <div id="status">OFFLINE</div>
+    <h1>CHORD VOCODER</h1>
+    <div id="status">READY</div>
     <div id="video-container"><video id="input_video" playsinline></video></div>
-    <div class="controls">Open Hand: Vocoder | Closed: Raw Voice</div>
-    <br>
-    <button id="startBtn">START SYSTEM</button>
+    <button id="startBtn">ACTIVATE SYSTEM</button>
 
     <script>
         const videoElement = document.getElementById('input_video');
         const statusDiv = document.getElementById('status');
         const startBtn = document.getElementById('startBtn');
 
-        let audioCtx, vocoderGain, bypassGain, oscillators = [];
+        let audioCtx, vocoderGain, oscillators = [];
+        const CHORDS = {
+            1: [146.83, 185.00, 220.00], // D Major (D3, F#3, A3)
+            2: [164.81, 196.00, 246.94], // E Minor (E3, G3, B3)
+            3: [185.00, 220.00, 277.18], // F# Minor (F#3, A3, C#4)
+            4: [196.00, 246.94, 293.66], // G Major (G3, B3, D4)
+            5: [220.00, 277.18, 329.63]  // A Major (A3, C#4, E4)
+        };
 
         startBtn.onclick = async () => {
-            try {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-                videoElement.srcObject = stream;
-                const micSource = audioCtx.createMediaStreamSource(stream);
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+            videoElement.srcObject = stream;
+            const micSource = audioCtx.createMediaStreamSource(stream);
 
-                // 1. Create a "FAT" Carrier (3 oscillators for a richer sound)
-                const freqs = [110, 110.5, 109.5]; // Slightly detuned for thickness
-                const carrierMixer = audioCtx.createGain();
-                freqs.forEach(f => {
-                    const osc = audioCtx.createOscillator();
-                    osc.type = 'sawtooth';
-                    osc.frequency.value = f;
-                    osc.start();
-                    osc.connect(carrierMixer);
-                    oscillators.push(osc);
-                });
+            // 1. Setup Carriers
+            const carrierMixer = audioCtx.createGain();
+            [0, 1, 2].forEach(i => {
+                const osc = audioCtx.createOscillator();
+                osc.type = 'sawtooth';
+                osc.frequency.value = 0; // Starts silent
+                osc.start();
+                osc.connect(carrierMixer);
+                oscillators.push(osc);
+            });
 
-                // 2. Vocoder & Bypass Nodes
-                vocoderGain = audioCtx.createGain();
-                vocoderGain.gain.value = 0;
-                
-                bypassGain = audioCtx.createGain();
-                bypassGain.gain.value = 0.5; // Raw voice starts audible
+            // 2. Clearer 6-Band Vocoder Bank
+            vocoderGain = audioCtx.createGain();
+            vocoderGain.gain.value = 0;
+            const bands = [250, 500, 1000, 2000, 4000, 8000];
+            bands.forEach(freq => {
+                const mF = audioCtx.createBiquadFilter(); mF.type = 'bandpass'; mF.frequency.value = freq; mF.Q.value = 2;
+                const cF = audioCtx.createBiquadFilter(); cF.type = 'bandpass'; cF.frequency.value = freq; cF.Q.value = 2;
+                const env = audioCtx.createGain(); env.gain.value = 0;
 
-                // 3. Simple 4-Band Filter Bank
-                const bands = [300, 800, 1500, 3000];
-                bands.forEach(freq => {
-                    const mFilter = audioCtx.createBiquadFilter();
-                    mFilter.type = 'bandpass'; mFilter.frequency.value = freq; mFilter.Q.value = 1;
-                    
-                    const cFilter = audioCtx.createBiquadFilter();
-                    cFilter.type = 'bandpass'; cFilter.frequency.value = freq; cFilter.Q.value = 1;
+                micSource.connect(mF);
+                mF.connect(env.gain);
+                carrierMixer.connect(cF);
+                cF.connect(env);
+                env.connect(vocoderGain);
+            });
 
-                    const env = audioCtx.createGain();
-                    env.gain.value = 0;
+            vocoderGain.connect(audioCtx.destination);
 
-                    micSource.connect(mFilter);
-                    mFilter.connect(env.gain); // Voice shapes the volume
+            // 3. Hand Logic
+            const hands = new Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
-                    carrierMixer.connect(cFilter);
-                    cFilter.connect(env);
-                    env.connect(vocoderGain);
-                });
+            hands.onResults((res) => {
+                if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
+                    const lm = res.multiHandLandmarks[0];
+                    // Finger counting logic (checking if tip is above knuckle)
+                    const fingers = [8, 12, 16, 20].filter(i => lm[i].y < lm[i-2].y).length;
+                    const thumb = lm[4].x < lm[3].x ? 1 : 0; // Simple thumb check
+                    const count = fingers + thumb;
 
-                // 4. Connect Everything to Output
-                micSource.connect(bypassGain);
-                bypassGain.connect(audioCtx.destination);
-                vocoderGain.connect(audioCtx.destination);
-
-                // 5. MediaPipe
-                const hands = new Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-                hands.setOptions({ maxNumHands: 1, modelComplexity: 1 });
-                hands.onResults((res) => {
-                    if (res.multiHandLandmarks && res.multiHandLandmarks.length > 0) {
-                        const open = res.multiHandLandmarks[0][8].y < res.multiHandLandmarks[0][6].y;
+                    if (count > 0 && CHORDS[count]) {
                         const now = audioCtx.currentTime;
-                        if (open) {
-                            vocoderGain.gain.setTargetAtTime(2.5, now, 0.05); // Boosted Vocoder
-                            bypassGain.gain.setTargetAtTime(0, now, 0.05);   // Mute Raw
-                            statusDiv.innerText = "MODE: VOCODER";
-                            statusDiv.style.color = "#00ffcc";
-                        } else {
-                            vocoderGain.gain.setTargetAtTime(0, now, 0.05);   // Mute Vocoder
-                            bypassGain.gain.setTargetAtTime(0.7, now, 0.05); // Show Raw
-                            statusDiv.innerText = "MODE: RAW VOICE";
-                            statusDiv.style.color = "#ffffff";
-                        }
+                        CHORDS[count].forEach((f, i) => {
+                            oscillators[i].frequency.setTargetAtTime(f, now, 0.03);
+                        });
+                        vocoderGain.gain.setTargetAtTime(1.5, now, 0.05);
+                        statusDiv.innerText = `CHORD: ${count} FINGERS`;
+                    } else {
+                        vocoderGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+                        statusDiv.innerText = "MUTED (CLOSED)";
                     }
-                });
+                }
+            });
 
-                new Camera(videoElement, {
-                    onFrame: async () => { await hands.send({image: videoElement}); },
-                    width: 640, height: 480
-                }).start();
-
-                startBtn.style.display = 'none';
-            } catch (e) { alert(e.message); }
+            new Camera(videoElement, { onFrame: async () => await hands.send({image: videoElement}) }).start();
+            startBtn.style.display = 'none';
         };
     </script>
 </body>
